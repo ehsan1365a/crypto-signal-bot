@@ -1,12 +1,10 @@
-name: futures signal bot
+name: Signal Bot Debug
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -15,11 +13,9 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: install requirements
-        run: pip install -r requirements.txt
+      - run: pip install ccxt pandas ta requests
 
-      - name: run bot
-        run: python main.py
+      - run: python main.py
         env:
           telegram_token: ${{ secrets.telegram_token }}
-          chat_id: ${{ secrets.chat_id }} 
+          chat_id: ${{ secrets.chat_id }}
