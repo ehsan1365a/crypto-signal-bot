@@ -11,7 +11,7 @@ from datetime import datetime
 SYMBOL = "ETH/USDT"
 TIMEFRAME = "15m"
 LEVERAGE = 5
-POSITION_USDT = 10   # سرمایه هر معامله (دلار)
+POSITION_USDT = 8   # سرمایه هر معامله (دلار)
 
 ATR_PERIOD = 14
 ATR_SL = 1.5
