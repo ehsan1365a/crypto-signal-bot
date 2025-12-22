@@ -81,22 +81,20 @@ for symbol in SYMBOLS:
 
 # انتخاب قوی‌ترین سیگنال
 if signals:
-    # بیشترین امتیاز
     best_signal = max(signals, key=lambda x: x["score"])
     
-    # معامله باز کردن
     side = best_signal["side"]
     symbol = best_signal["symbol"]
     entry = best_signal["entry"]
     sl = best_signal["sl"]
     tp = best_signal["tp"]
 
-    # ⚠️ سفارش واقعی (Market) - اگر میخوای می‌تونی Limit هم بزنی
+    # ⚡ اصلاح Market Buy/Sell برای CoinEx
     try:
         if side == "LONG":
-            exchange.create_market_buy_order(symbol, POSITION_SIZE/entry)
+            exchange.create_market_buy_order(symbol, POSITION_SIZE, {'createMarketBuyOrderRequiresPrice': False})
         else:
-            exchange.create_market_sell_order(symbol, POSITION_SIZE/entry)
+            exchange.create_market_sell_order(symbol, POSITION_SIZE, {'createMarketBuyOrderRequiresPrice': False})
     except Exception as e:
         send(f"❌ Error opening order: {e}")
 
