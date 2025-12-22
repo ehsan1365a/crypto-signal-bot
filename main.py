@@ -9,10 +9,17 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.getenv("telegram_token")
 CHAT_ID = os.getenv("chat_id")
 
+# سرمایه هر معامله
+POSITION_SIZE = 10  # دلار
+
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
 TIMEFRAMES = ["15m", "1h"]
 
-exchange = ccxt.coinex({"enableRateLimit": True})
+exchange = ccxt.coinex({
+    "enableRateLimit": True,
+    "apiKey": os.getenv("COINEX_API_KEY"),
+    "secret": os.getenv("COINEX_API_SECRET")
+})
 
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -35,33 +42,67 @@ def analyze(symbol, tf):
     price = last["c"]
     atr = last["atr"]
 
-    if last["ema50"] > last["ema200"] and 40 < last["rsi"] < 65 and last["macd_hist"] > 0:
-        return {"side": "LONG", "entry": price, "sl": price - 1.5*atr, "tp": price + 3*atr}
-    elif last["ema50"] < last["ema200"] and 35 < last["rsi"] < 60 and last["macd_hist"] < 0:
-        return {"side": "SHORT", "entry": price, "sl": price + 1.5*atr, "tp": price - 3*atr}
+    score = 0
+    side = None
+
+    # امتیازدهی ساده
+    if last["ema50"] > last["ema200"]:
+        score += 1
+    else:
+        score -= 1
+
+    if 40 < last["rsi"] < 65:
+        score += 1
+    elif 35 < last["rsi"] < 60:
+        score -= 1
+
+    if last["macd_hist"] > 0:
+        score +=1
+    elif last["macd_hist"] < 0:
+        score -=1
+
+    # تعیین سمت معامله
+    if score >= 2:
+        side = "LONG"
+        return {"symbol": symbol, "side": side, "score": score, "entry": price, "sl": price - 1.5*atr, "tp": price + 3*atr}
+    elif score <= -2:
+        side = "SHORT"
+        return {"symbol": symbol, "side": side, "score": score, "entry": price, "sl": price + 1.5*atr, "tp": price - 3*atr}
     else:
         return None
 
 # ===== Main Loop =====
-messages = []
+signals = []
 for symbol in SYMBOLS:
-    votes = {"LONG": 0, "SHORT": 0}
-    results = []
     for tf in TIMEFRAMES:
         res = analyze(symbol, tf)
         if res:
-            votes[res["side"]] += 1
-            results.append(res)
-    # تصمیم نهایی
-    if votes["LONG"] > votes["SHORT"]:
-        r = results[0]
-        messages.append(f"🟢 {symbol}\nSide: {r['side']}\nEntry: {r['entry']:.4f}\nSL: {r['sl']:.4f}\nTP: {r['tp']:.4f}")
-    elif votes["SHORT"] > votes["LONG"]:
-        r = results[0]
-        messages.append(f"🔴 {symbol}\nSide: {r['side']}\nEntry: {r['entry']:.4f}\nSL: {r['sl']:.4f}\nTP: {r['tp']:.4f}")
+            signals.append(res)
 
-if messages:
-    msg = f"📡 Futures Signal Bot (ATR-Based)\nTFs: {TIMEFRAMES}\nTime: {datetime.utcnow()}\n\n" + "\n\n".join(messages)
+# انتخاب قوی‌ترین سیگنال
+if signals:
+    # بیشترین امتیاز
+    best_signal = max(signals, key=lambda x: x["score"])
+    
+    # معامله باز کردن
+    side = best_signal["side"]
+    symbol = best_signal["symbol"]
+    entry = best_signal["entry"]
+    sl = best_signal["sl"]
+    tp = best_signal["tp"]
+
+    # ⚠️ سفارش واقعی (Market) - اگر میخوای می‌تونی Limit هم بزنی
+    try:
+        if side == "LONG":
+            exchange.create_market_buy_order(symbol, POSITION_SIZE/entry)
+        else:
+            exchange.create_market_sell_order(symbol, POSITION_SIZE/entry)
+    except Exception as e:
+        send(f"❌ Error opening order: {e}")
+
+    # پیام تلگرام
+    msg = f"📡 Futures Trade Bot (ATR-Based)\nTime: {datetime.utcnow()}\n\n"
+    msg += f"{'🟢' if side=='LONG' else '🔴'} {symbol}\nSide: {side}\nEntry: {entry:.4f}\nSL: {sl:.4f}\nTP: {tp:.4f}\nSize: ${POSITION_SIZE}"
     send(msg)
 else:
     send("📭 No strong signals on selected pairs")
