@@ -10,7 +10,7 @@ from datetime import datetime
 SYMBOL = "ETH/USDT"         # ارز مورد نظر
 TIMEFRAME = "15m"            # تایم فریم
 LEVERAGE = 3                 # لوریج امن
-POSITION_USDT = 10           # سرمایه هر معامله (USDT)
+POSITION_USDT = 6           # سرمایه هر معامله (USDT)
 
 ATR_PERIOD = 14
 ATR_SL = 1.5
