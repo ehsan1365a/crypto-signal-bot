@@ -1,108 +1,134 @@
 import ccxt
+import pandas as pd
+import ta
 import os
 import requests
-import pandas as pd
 from datetime import datetime
 
-# =======================
-# CONFIG
-# =======================
-SYMBOL = "ETH/USDT"         # ارز مورد نظر
-TIMEFRAME = "15m"            # تایم فریم
-LEVERAGE = 3                 # لوریج امن
-POSITION_USDT = 6           # سرمایه هر معامله (USDT)
-
-ATR_PERIOD = 14
-ATR_SL = 1.5
-ATR_TP = 3.0
-
-# =======================
-# TELEGRAM
-# =======================
+# ===== CONFIG =====
 TELEGRAM_TOKEN = os.getenv("telegram_token")
 CHAT_ID = os.getenv("chat_id")
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
+TIMEFRAMES = ["15m", "1h"]
 
-# =======================
-# EXCHANGE (COINEX FUTURES)
-# =======================
+POSITION_USDT = 10      # سرمایه هر معامله
+LEVERAGE = 3            # لوریج امن
+MARKET_TYPE = "swap"    # Futures (USDT-M)
+
+# ===== EXCHANGE =====
 exchange = ccxt.coinex({
+    "enableRateLimit": True,
     "apiKey": os.getenv("COINEX_API_KEY"),
     "secret": os.getenv("COINEX_API_SECRET"),
-    "enableRateLimit": True,
     "options": {
-        "defaultType": "swap",
-        "createMarketBuyOrderRequiresPrice": False
+        "defaultType": MARKET_TYPE
     }
 })
 
-# =======================
-# INDICATORS
-# =======================
-def get_atr(df, period=14):
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
+# ===== TELEGRAM =====
+def send(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
 
-    tr = pd.concat([
-        high - low,
-        abs(high - close.shift()),
-        abs(low - close.shift())
-    ], axis=1).max(axis=1)
+# ===== CHECK OPEN POSITION =====
+def has_open_position(symbol):
+    positions = exchange.fetch_positions([symbol])
+    for p in positions:
+        if abs(float(p.get("contracts", 0))) > 0:
+            return True
+    return False
 
-    return tr.rolling(period).mean()
+# ===== ANALYZE =====
+def analyze(symbol, tf):
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=200)
+    df = pd.DataFrame(ohlcv, columns=["t","o","h","l","c","v"])
 
-# =======================
-# MAIN LOGIC
-# =======================
-def run_bot():
-    try:
-        ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
-        df = pd.DataFrame(ohlcv, columns=["time","open","high","low","close","vol"])
-        price = df["close"].iloc[-1]
+    df["ema50"] = ta.trend.EMAIndicator(df["c"], 50).ema_indicator()
+    df["ema200"] = ta.trend.EMAIndicator(df["c"], 200).ema_indicator()
+    df["rsi"] = ta.momentum.RSIIndicator(df["c"], 14).rsi()
+    df["atr"] = ta.volatility.AverageTrueRange(df["h"], df["l"], df["c"], 14).average_true_range()
+    macd = ta.trend.MACD(df["c"])
+    df["macd_hist"] = macd.macd_diff()
 
-        atr = get_atr(df, ATR_PERIOD).iloc[-1]
+    last = df.iloc[-1]
+    score = 0
 
-        # ساده‌ترین استراتژی جهت‌دار
-        side = "LONG" if df["close"].iloc[-1] > df["close"].iloc[-2] else "SHORT"
+    score += 1 if last["ema50"] > last["ema200"] else -1
+    score += 1 if last["macd_hist"] > 0 else -1
+    if 40 < last["rsi"] < 65:
+        score += 1
+    elif 35 < last["rsi"] < 60:
+        score -= 1
 
-        sl = price - ATR_SL * atr if side == "LONG" else price + ATR_SL * atr
-        tp = price + ATR_TP * atr if side == "LONG" else price - ATR_TP * atr
+    if score >= 2:
+        side = "LONG"
+    elif score <= -2:
+        side = "SHORT"
+    else:
+        return None
 
-        # =======================
-        # CALCULATE CONTRACTS
-        # =======================
-        contracts = (POSITION_USDT * LEVERAGE) / price
+    return {
+        "symbol": symbol,
+        "side": side,
+        "score": score,
+        "price": last["c"],
+        "atr": last["atr"]
+    }
 
-        # =======================
-        # OPEN ORDER
-        # =======================
-        if side == "LONG":
-            exchange.create_market_buy_order(SYMBOL, contracts)
-        else:
-            exchange.create_market_sell_order(SYMBOL, contracts)
+# ===== MAIN =====
+signals = []
 
-        msg = f"""
-📡 Futures Trade Bot (ATR-Based)
-Time: {datetime.utcnow()}
+for symbol in SYMBOLS:
+    for tf in TIMEFRAMES:
+        r = analyze(symbol, tf)
+        if r:
+            signals.append(r)
 
-{'🟢' if side=='LONG' else '🔴'} {SYMBOL}
-Side: {side}
-Entry: {price:.4f}
-SL: {sl:.4f}
-TP: {tp:.4f}
-Size: ${POSITION_USDT}
-Leverage: {LEVERAGE}x
-"""
-        send_telegram(msg)
+if not signals:
+    send("📭 No strong futures signal")
+    exit()
 
-    except Exception as e:
-        send_telegram(f"❌ Order error: {e}")
+best = max(signals, key=lambda x: abs(x["score"]))
+symbol = best["symbol"]
+side = best["side"]
+price = best["price"]
+atr = best["atr"]
 
-# =======================
-# RUN
-# =======================
-run_bot()
+# Check existing position
+if has_open_position(symbol):
+    send(f"⛔ Position already open on {symbol}")
+    exit()
+
+# Set leverage
+market = exchange.market(symbol)
+exchange.set_leverage(LEVERAGE, market["id"])
+
+# Position size (contracts)
+amount = (POSITION_USDT * LEVERAGE) / price
+
+# Place order
+try:
+    if side == "LONG":
+        exchange.create_market_buy_order(symbol, amount)
+    else:
+        exchange.create_market_sell_order(symbol, amount)
+
+    sl = price - 1.5 * atr if side == "LONG" else price + 1.5 * atr
+    tp = price + 3 * atr if side == "LONG" else price - 3 * atr
+
+    msg = (
+        f"🚀 Futures Trade OPENED\n"
+        f"Time: {datetime.utcnow()}\n\n"
+        f"{'🟢' if side=='LONG' else '🔴'} {symbol}\n"
+        f"Side: {side}\n"
+        f"Entry: {price:.4f}\n"
+        f"SL: {sl:.4f}\n"
+        f"TP: {tp:.4f}\n"
+        f"Size: ${POSITION_USDT}\n"
+        f"Leverage: {LEVERAGE}x"
+    )
+    send(msg)
+
+except Exception as e:
+    send(f"❌ Order error: {e}")
