@@ -1,21 +1,31 @@
-name: Signal Bot Debug
+name: CoinEx Futures Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # اجرای دستی
 
 jobs:
-  run:
+  run-bot:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v4
+    env:
+      telegram_token: ${{ secrets.telegram_token }}
+      chat_id: ${{ secrets.chat_id }}
+      COINEX_API_KEY: ${{ secrets.COINEX_API_KEY }}
+      COINEX_API_SECRET: ${{ secrets.COINEX_API_SECRET }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - run: pip install ccxt pandas ta requests
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ccxt pandas ta requests
 
-      - run: python main.py
-        env:
-          telegram_token: ${{ secrets.telegram_token }}
-          chat_id: ${{ secrets.chat_id }}
+      - name: Run trading bot
+        run: python main.py
