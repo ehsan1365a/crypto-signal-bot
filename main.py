@@ -1,33 +1,22 @@
 import ccxt
 import os
 import requests
-import pandas as pd
+import time
 from datetime import datetime
 
 # =======================
-# CONFIG
+# Telegram
 # =======================
-SYMBOLS = ["SOL/USDT", "ADA/USDT", "XRP/USDT", "DOGE/USDT", "BNB/USDT"]
-TIMEFRAME = "15m"
-LEVERAGE = 3
-POSITION_USDT = 18
-
-ATR_PERIOD = 14
-ATR_SL = 1.5
-ATR_TP = 3.0
-
-# =======================
-# TELEGRAM
-# =======================
-TG_TOKEN = os.getenv("telegram_token")
+TELEGRAM_TOKEN = os.getenv("telegram_token")
 CHAT_ID = os.getenv("chat_id")
 
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": msg}
+    requests.post(url, data=data)
 
 # =======================
-# EXCHANGE
+# CoinEx Futures
 # =======================
 exchange = ccxt.coinex({
     "apiKey": os.getenv("COINEX_API_KEY"),
@@ -39,89 +28,84 @@ exchange = ccxt.coinex({
     }
 })
 
-exchange.load_markets()
+# =======================
+# Settings
+# =======================
+SYMBOLS = [
+    "ADA/USDT",
+    "XRP/USDT",
+    "DOGE/USDT"
+]
+
+TIMEFRAME = "15m"
+USDT_PER_TRADE = 6
+LEVERAGE = 3
 
 # =======================
-# INDICATORS
+# Functions
 # =======================
-def get_atr(df, period=14):
-    tr = pd.concat([
-        df["high"] - df["low"],
-        abs(df["high"] - df["close"].shift()),
-        abs(df["low"] - df["close"].shift())
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+def set_leverage(symbol):
+    try:
+        exchange.set_leverage(LEVERAGE, symbol)
+    except:
+        pass
 
-def signal_strength(df, atr):
-    return abs(df["close"].iloc[-1] - df["close"].iloc[-2]) / atr if atr else 0
+def get_signal(symbol):
+    candles = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=20)
+    closes = [c[4] for c in candles]
 
-# =======================
-# MAIN
-# =======================
-def run_bot():
-    candidates = []
+    fast_ma = sum(closes[-5:]) / 5
+    slow_ma = sum(closes[-15:]) / 15
 
-    for symbol in SYMBOLS:
-        try:
-            ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=100)
-            df = pd.DataFrame(ohlcv, columns=["t","open","high","low","close","vol"])
-            price = df["close"].iloc[-1]
-            atr = get_atr(df).iloc[-1]
+    price = closes[-1]
 
-            side = "LONG" if df["close"].iloc[-1] > df["close"].iloc[-2] else "SHORT"
-            strength = signal_strength(df, atr)
+    if fast_ma > slow_ma:
+        return "LONG", price
+    elif fast_ma < slow_ma:
+        return "SHORT", price
+    else:
+        return None, price
 
-            raw_amount = (POSITION_USDT * LEVERAGE) / price
-            min_amount = exchange.market(symbol)["limits"]["amount"]["min"]
+def open_trade(symbol, side, price):
+    set_leverage(symbol)
 
-            if raw_amount < min_amount:
-                send_telegram(f"⚠️ {symbol} skipped (amount too small)")
-                continue
-
-            amount = round(raw_amount, 3)
-
-            candidates.append({
-                "symbol": symbol,
-                "side": side,
-                "price": price,
-                "atr": atr,
-                "strength": strength,
-                "amount": amount
-            })
-
-        except Exception as e:
-            send_telegram(f"❌ {symbol} fetch error: {e}")
-
-    if not candidates:
-        send_telegram("❌ No valid trades (capital too low)")
-        return
-
-    trade = max(candidates, key=lambda x: x["strength"])
-
-    sl = trade["price"] - ATR_SL * trade["atr"] if trade["side"] == "LONG" else trade["price"] + ATR_SL * trade["atr"]
-    tp = trade["price"] + ATR_TP * trade["atr"] if trade["side"] == "LONG" else trade["price"] - ATR_TP * trade["atr"]
+    amount = (USDT_PER_TRADE * LEVERAGE) / price
+    amount = float(exchange.amount_to_precision(symbol, amount))
 
     try:
-        if trade["side"] == "LONG":
-            exchange.create_market_buy_order(trade["symbol"], trade["amount"])
-        else:
-            exchange.create_market_sell_order(trade["symbol"], trade["amount"])
+        order = exchange.create_order(
+            symbol=symbol,
+            type="market",
+            side="buy" if side == "LONG" else "sell",
+            amount=amount
+        )
 
         send_telegram(
-f"""📡 Futures Trade Bot
-Time: {datetime.utcnow()}
-
-{'🟢' if trade['side']=='LONG' else '🔴'} {trade['symbol']}
-Side: {trade['side']}
-Entry: {trade['price']:.4f}
-SL: {sl:.4f}
-TP: {tp:.4f}
-Size: ${POSITION_USDT}
-Leverage: {LEVERAGE}x"""
+            f"✅ Trade Opened\n"
+            f"{symbol}\n"
+            f"Side: {side}\n"
+            f"Price: {price}\n"
+            f"Size: {USDT_PER_TRADE}$\n"
+            f"Time: {datetime.now()}"
         )
 
     except Exception as e:
-        send_telegram(f"❌ Order error: {e}")
+        send_telegram(f"❌ Order error: {str(e)}")
 
 # =======================
-run_bot()
+# Run Bot
+# =======================
+send_telegram("🚀 Futures Bot Started")
+
+for symbol in SYMBOLS:
+    try:
+        side, price = get_signal(symbol)
+
+        if side:
+            open_trade(symbol, side, price)
+            break  # فقط یک معامله باز شود
+
+    except Exception as e:
+        send_telegram(f"⚠️ Error {symbol}: {str(e)}")
+
+send_telegram("⏹ Bot Finished")
