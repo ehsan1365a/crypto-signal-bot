@@ -1,6 +1,5 @@
 import ccxt
 import os
-import time
 import requests
 import pandas as pd
 from datetime import datetime
@@ -8,10 +7,10 @@ from datetime import datetime
 # =======================
 # CONFIG
 # =======================
-SYMBOL = "ETH/USDT"
-TIMEFRAME = "15m"
-LEVERAGE = 5
-POSITION_USDT = 6   # سرمایه هر معامله (دلار)
+SYMBOL = "ETH/USDT"         # ارز مورد نظر
+TIMEFRAME = "15m"            # تایم فریم
+LEVERAGE = 3                 # لوریج امن
+POSITION_USDT = 10           # سرمایه هر معامله (USDT)
 
 ATR_PERIOD = 14
 ATR_SL = 1.5
@@ -25,8 +24,7 @@ CHAT_ID = os.getenv("chat_id")
 
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": msg}
-    requests.post(url, data=data)
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 # =======================
 # EXCHANGE (COINEX FUTURES)
@@ -75,29 +73,34 @@ def run_bot():
         tp = price + ATR_TP * atr if side == "LONG" else price - ATR_TP * atr
 
         # =======================
+        # CALCULATE CONTRACTS
+        # =======================
+        contracts = (POSITION_USDT * LEVERAGE) / price
+
+        # =======================
         # OPEN ORDER
         # =======================
         if side == "LONG":
-            order = exchange.create_market_buy_order(SYMBOL, POSITION_USDT)
+            exchange.create_market_buy_order(SYMBOL, contracts)
         else:
-            contracts = (POSITION_USDT * LEVERAGE) / price
-            order = exchange.create_market_sell_order(SYMBOL, contracts)
+            exchange.create_market_sell_order(SYMBOL, contracts)
 
         msg = f"""
 📡 Futures Trade Bot (ATR-Based)
-Time: {datetime.now()}
+Time: {datetime.utcnow()}
 
-🟢 {SYMBOL}
+{'🟢' if side=='LONG' else '🔴'} {SYMBOL}
 Side: {side}
 Entry: {price:.4f}
 SL: {sl:.4f}
 TP: {tp:.4f}
 Size: ${POSITION_USDT}
+Leverage: {LEVERAGE}x
 """
         send_telegram(msg)
 
     except Exception as e:
-        send_telegram(f"❌ Order error: {str(e)}")
+        send_telegram(f"❌ Order error: {e}")
 
 # =======================
 # RUN
