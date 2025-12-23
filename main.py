@@ -1,6 +1,5 @@
 import ccxt
 import os
-import time
 import requests
 
 # ================== TELEGRAM ==================
@@ -23,19 +22,18 @@ exchange = ccxt.coinex({
     }
 })
 
-symbol = "BTC/USDT"
-leverage = 3
-trade_cost = 8  # USDT واقعی
+# ✅ سمبل صحیح فیوچرز
+symbol = "BTC/USDT:USDT"
 
-# ================== START ==================
+trade_cost = 8  # USDT واقعی (ایمن با 25 دلار)
+
 send_telegram("🚀 Futures Bot Started")
 
 try:
-    exchange.set_leverage(leverage, symbol)
     ticker = exchange.fetch_ticker(symbol)
     price = ticker["last"]
 
-    amount = trade_cost / price  # مقدار قرارداد
+    amount = trade_cost / price
 
     order = exchange.create_market_buy_order(
         symbol=symbol,
@@ -44,11 +42,11 @@ try:
 
     send_telegram(
         f"✅ Order Opened\n\n"
-        f"Symbol: {symbol}\n"
+        f"Symbol: BTC Futures\n"
         f"Side: LONG\n"
-        f"Price: {price}\n"
+        f"Entry: {price}\n"
         f"Size: {trade_cost} USDT\n"
-        f"Leverage: {leverage}x"
+        f"Leverage: Manual (3x)"
     )
 
 except Exception as e:
