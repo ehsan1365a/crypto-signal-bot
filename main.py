@@ -2,16 +2,15 @@ import ccxt
 import os
 import requests
 
-# ================== TELEGRAM ==================
-TELEGRAM_TOKEN = os.getenv("telegram_token")
+# ========= TELEGRAM =========
+TOKEN = os.getenv("telegram_token")
 CHAT_ID = os.getenv("chat_id")
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": msg}
-    requests.post(url, data=data)
+def send(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
-# ================== COINEX ==================
+# ========= COINEX =========
 exchange = ccxt.coinex({
     "apiKey": os.getenv("COINEX_API_KEY"),
     "secret": os.getenv("COINEX_API_SECRET"),
@@ -22,34 +21,34 @@ exchange = ccxt.coinex({
     }
 })
 
-# ✅ سمبل صحیح فیوچرز
-symbol = "BTC/USDT:USDT"
+# ✅ ارز مناسب سرمایه کم
+SYMBOL = "ADA/USDT:USDT"
 
-trade_cost = 8  # USDT واقعی (ایمن با 25 دلار)
+TRADE_USDT = 8  # امن با 25 دلار
 
-send_telegram("🚀 Futures Bot Started")
+send("🚀 Futures Bot Started")
 
 try:
-    ticker = exchange.fetch_ticker(symbol)
-    price = ticker["last"]
+    price = exchange.fetch_ticker(SYMBOL)["last"]
 
-    amount = trade_cost / price
+    # محاسبه مقدار + گرد کردن امن
+    amount = round(TRADE_USDT / price, 2)
 
     order = exchange.create_market_buy_order(
-        symbol=symbol,
+        symbol=SYMBOL,
         amount=amount
     )
 
-    send_telegram(
+    send(
         f"✅ Order Opened\n\n"
-        f"Symbol: BTC Futures\n"
+        f"Symbol: ADA Futures\n"
         f"Side: LONG\n"
         f"Entry: {price}\n"
-        f"Size: {trade_cost} USDT\n"
-        f"Leverage: Manual (3x)"
+        f"Amount: {amount}\n"
+        f"Margin: {TRADE_USDT} USDT"
     )
 
 except Exception as e:
-    send_telegram(f"❌ Order error: {str(e)}")
+    send(f"❌ Order error: {str(e)}")
 
-send_telegram("⏹ Bot Finished")
+send("⏹ Bot Finished")
