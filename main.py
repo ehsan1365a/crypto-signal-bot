@@ -38,7 +38,7 @@ SYMBOLS = [
 ]
 
 TIMEFRAME = "15m"
-USDT_PER_TRADE = 6
+USDT_PER_TRADE = 10
 LEVERAGE = 3
 
 # =======================
