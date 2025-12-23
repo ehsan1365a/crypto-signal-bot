@@ -21,18 +21,26 @@ exchange = ccxt.coinex({
     }
 })
 
-# ✅ ارز مناسب سرمایه کم
 SYMBOL = "ADA/USDT:USDT"
-
-TRADE_USDT = 8  # امن با 25 دلار
+TRADE_USDT = 8  # امن
 
 send("🚀 Futures Bot Started")
 
 try:
+    markets = exchange.load_markets()
+    market = markets[SYMBOL]
+
     price = exchange.fetch_ticker(SYMBOL)["last"]
 
-    # محاسبه مقدار + گرد کردن امن
-    amount = round(TRADE_USDT / price, 2)
+    min_amount = market["limits"]["amount"]["min"]
+
+    amount = TRADE_USDT / price
+
+    # ✅ اصلاح اتومات حداقل حجم
+    if amount < min_amount:
+        amount = min_amount
+
+    amount = float(exchange.amount_to_precision(SYMBOL, amount))
 
     order = exchange.create_market_buy_order(
         symbol=SYMBOL,
@@ -42,10 +50,10 @@ try:
     send(
         f"✅ Order Opened\n\n"
         f"Symbol: ADA Futures\n"
-        f"Side: LONG\n"
         f"Entry: {price}\n"
         f"Amount: {amount}\n"
-        f"Margin: {TRADE_USDT} USDT"
+        f"Margin: {TRADE_USDT} USDT\n"
+        f"MinAmount: {min_amount}"
     )
 
 except Exception as e:
