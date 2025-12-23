@@ -1,4 +1,4 @@
-import ccxt, os, requests, time
+import ccxt, os, requests
 
 # ===== TELEGRAM =====
 TOKEN = os.getenv("telegram_token")
@@ -28,19 +28,15 @@ SYMBOLS = [
 ]
 
 USDT_PER_TRADE = 8
-TP_PERCENT = 0.8
-SL_PERCENT = 0.5
 
 send("🚀 Auto Futures Bot Started")
 
 def atr(ohlcv, period=14):
     trs = []
     for i in range(1, len(ohlcv)):
-        high = ohlcv[i][2]
-        low = ohlcv[i][3]
-        prev_close = ohlcv[i-1][4]
-        tr = max(high-low, abs(high-prev_close), abs(low-prev_close))
-        trs.append(tr)
+        h, l = ohlcv[i][2], ohlcv[i][3]
+        pc = ohlcv[i-1][4]
+        trs.append(max(h-l, abs(h-pc), abs(l-pc)))
     return sum(trs[-period:]) / period
 
 try:
@@ -53,7 +49,6 @@ try:
 
         body = abs(last[4] - last[1])
         a = atr(ohlcv)
-
         if a == 0:
             continue
 
@@ -69,15 +64,13 @@ try:
             }
 
     if not best:
-        send("❌ No valid signal found")
+        send("❌ No strong signal found")
     else:
         symbol = best["symbol"]
         side = best["side"]
         price = best["price"]
 
-        market = markets[symbol]
-        min_amount = market["limits"]["amount"]["min"]
-
+        min_amount = markets[symbol]["limits"]["amount"]["min"]
         amount = USDT_PER_TRADE / price
         if amount < min_amount:
             amount = min_amount
@@ -86,41 +79,12 @@ try:
 
         exchange.create_market_order(symbol, side, amount)
 
-        if side == "buy":
-            tp = price * (1 + TP_PERCENT/100)
-            sl = price * (1 - SL_PERCENT/100)
-            close_side = "sell"
-            side_txt = "LONG"
-        else:
-            tp = price * (1 - TP_PERCENT/100)
-            sl = price * (1 + SL_PERCENT/100)
-            close_side = "buy"
-            side_txt = "SHORT"
-
-        time.sleep(2)
-
-        exchange.create_order(
-            symbol, "limit", close_side, amount,
-            exchange.price_to_precision(symbol, tp),
-            {"reduce_only": True}
-        )
-
-        exchange.create_order(
-            symbol, "stop_market", close_side, amount,
-            params={
-                "stopPrice": exchange.price_to_precision(symbol, sl),
-                "reduce_only": True
-            }
-        )
-
         send(
-            f"✅ BEST SIGNAL TRADED\n\n"
+            f"✅ BEST SIGNAL EXECUTED\n\n"
             f"Symbol: {symbol}\n"
-            f"Side: {side_txt}\n"
+            f"Side: {'LONG' if side=='buy' else 'SHORT'}\n"
             f"Entry: {price:.4f}\n"
-            f"Amount: {amount}\n"
-            f"TP: {tp:.4f}\n"
-            f"SL: {sl:.4f}"
+            f"Amount: {amount}"
         )
 
 except Exception as e:
