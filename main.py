@@ -1,6 +1,5 @@
 import ccxt
 import os
-import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -33,7 +32,7 @@ exchange = ccxt.coinex({
 # SETTINGS
 # =======================
 TIMEFRAMES = ["15m", "1h"]
-RISK_USDT = 8          # مارجین
+RISK_USDT = 8
 LEVERAGE = 3
 ATR_MULT_SL = 1.2
 ATR_MULT_TP = 2.0
@@ -72,6 +71,7 @@ def signal_from_tf(symbol, tf):
         return "LONG", last["atr"]
     elif last["ema_fast"] < last["ema_slow"]:
         return "SHORT", last["atr"]
+
     return None, None
 
 # =======================
@@ -81,22 +81,23 @@ def find_best_signal():
     best = None
 
     for symbol in SYMBOLS:
-        directions = []
+        sides = []
         atrs = []
 
         for tf in TIMEFRAMES:
             side, atr_val = signal_from_tf(symbol, tf)
             if side:
-                directions.append(side)
+                sides.append(side)
                 atrs.append(atr_val)
 
-        if len(directions) == len(TIMEFRAMES) and directions.count(directions[0]) == len(directions):
-            strength = np.mean(atrs)
-            if not best or strength > best["strength"]:
+        if len(sides) == len(TIMEFRAMES) and sides.count(sides[0]) == len(sides):
+            avg_atr = float(np.mean(atrs))
+
+            if best is None or avg_atr > best["atr"]:
                 best = {
                     "symbol": symbol,
-                    "side": directions[0],
-                    "atr": strength
+                    "side": sides[0],
+                    "atr": avg_atr
                 }
 
     return best
@@ -110,24 +111,18 @@ def execute_trade(signal):
     atr_val = signal["atr"]
 
     exchange.set_leverage(LEVERAGE, symbol)
-
-    ticker = exchange.fetch_ticker(symbol)
-    price = ticker["last"]
+    price = exchange.fetch_ticker(symbol)["last"]
 
     amount = round((RISK_USDT * LEVERAGE) / price, 4)
 
     if side == "LONG":
-        order = exchange.create_market_buy_order(symbol, amount)
+        exchange.create_market_buy_order(symbol, amount)
         sl = price - ATR_MULT_SL * atr_val
         tp = price + ATR_MULT_TP * atr_val
-        exchange.create_order(symbol, "market", "sell", amount, None, {"stopPrice": sl})
-        exchange.create_order(symbol, "market", "sell", amount, None, {"stopPrice": tp})
     else:
-        order = exchange.create_market_sell_order(symbol, amount)
+        exchange.create_market_sell_order(symbol, amount)
         sl = price + ATR_MULT_SL * atr_val
         tp = price - ATR_MULT_TP * atr_val
-        exchange.create_order(symbol, "market", "buy", amount, None, {"stopPrice": sl})
-        exchange.create_order(symbol, "market", "buy", amount, None, {"stopPrice": tp})
 
     send_telegram(
         f"✅ BEST SIGNAL EXECUTED\n\n"
@@ -147,7 +142,7 @@ send_telegram("🚀 Auto Futures Bot Started")
 try:
     signal = find_best_signal()
 
-    if not signal:
+    if signal is None:
         send_telegram("❌ No strong signal found")
     else:
         execute_trade(signal)
