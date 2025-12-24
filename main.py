@@ -2,7 +2,6 @@ import ccxt
 import os
 import pandas as pd
 import numpy as np
-from datetime import datetime
 
 # =======================
 # Telegram
@@ -32,6 +31,7 @@ exchange = ccxt.coinex({
 # SETTINGS
 # =======================
 TIMEFRAMES = ["15m", "1h"]
+
 SYMBOLS = [
     "BTC/USDT:USDT",
     "ETH/USDT:USDT",
@@ -64,6 +64,7 @@ def atr(df, period=14):
 def get_signal(symbol, tf):
     ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=100)
     df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+
     df["ema20"] = df["close"].ewm(span=20).mean()
     df["ema50"] = df["close"].ewm(span=50).mean()
     df["atr"] = atr(df)
@@ -71,16 +72,16 @@ def get_signal(symbol, tf):
     last = df.iloc[-1]
 
     if last["ema20"] > last["ema50"]:
-        return "LONG", last["atr"]
+        return "LONG", float(last["atr"])
     elif last["ema20"] < last["ema50"]:
-        return "SHORT", last["atr"]
+        return "SHORT", float(last["atr"])
 
     return None, None
 
 # =======================
 # Find Best Signal
 # =======================
-def find_best():
+def find_best_signal():
     best = None
 
     for symbol in SYMBOLS:
@@ -108,7 +109,7 @@ def find_best():
 # =======================
 # Execute Trade + SL/TP
 # =======================
-def execute(signal):
+def execute_trade(signal):
     symbol = signal["symbol"]
     side = signal["side"]
     atr_val = signal["atr"]
@@ -117,46 +118,65 @@ def execute(signal):
     price = exchange.fetch_ticker(symbol)["last"]
 
     amount = round((RISK_USDT * LEVERAGE) / price, 4)
-
     if amount <= 0:
         raise Exception("Amount too small")
 
     if side == "LONG":
         exchange.create_market_buy_order(symbol, amount)
-        sl_price = price - ATR_SL * atr_val
-        tp_price = price + ATR_TP * atr_val
+
+        sl = price - ATR_SL * atr_val
+        tp = price + ATR_TP * atr_val
 
         exchange.create_order(
-            symbol, "stop_market", "sell", amount,
-            None, {"stopPrice": round(sl_price,4), "reduceOnly": True}
+            symbol, "market", "sell", amount, None,
+            {
+                "stop": "loss",
+                "stop_price": round(sl, 4),
+                "reduce_only": True
+            }
         )
+
         exchange.create_order(
-            symbol, "take_profit_market", "sell", amount,
-            None, {"stopPrice": round(tp_price,4), "reduceOnly": True}
+            symbol, "market", "sell", amount, None,
+            {
+                "stop": "entry",
+                "stop_price": round(tp, 4),
+                "reduce_only": True
+            }
         )
 
     else:
         exchange.create_market_sell_order(symbol, amount)
-        sl_price = price + ATR_SL * atr_val
-        tp_price = price - ATR_TP * atr_val
+
+        sl = price + ATR_SL * atr_val
+        tp = price - ATR_TP * atr_val
 
         exchange.create_order(
-            symbol, "stop_market", "buy", amount,
-            None, {"stopPrice": round(sl_price,4), "reduceOnly": True}
+            symbol, "market", "buy", amount, None,
+            {
+                "stop": "loss",
+                "stop_price": round(sl, 4),
+                "reduce_only": True
+            }
         )
+
         exchange.create_order(
-            symbol, "take_profit_market", "buy", amount,
-            None, {"stopPrice": round(tp_price,4), "reduceOnly": True}
+            symbol, "market", "buy", amount, None,
+            {
+                "stop": "entry",
+                "stop_price": round(tp, 4),
+                "reduce_only": True
+            }
         )
 
     send_telegram(
         f"✅ TRADE OPENED + SL/TP SET\n\n"
         f"Symbol: {symbol}\n"
         f"Side: {side}\n"
-        f"Entry: {price}\n"
+        f"Entry: {round(price,4)}\n"
         f"Amount: {amount}\n"
-        f"SL: {round(sl_price,4)}\n"
-        f"TP: {round(tp_price,4)}"
+        f"SL: {round(sl,4)}\n"
+        f"TP: {round(tp,4)}"
     )
 
 # =======================
@@ -165,9 +185,9 @@ def execute(signal):
 send_telegram("🚀 Auto Futures Bot Started")
 
 try:
-    signal = find_best()
+    signal = find_best_signal()
     if signal:
-        execute(signal)
+        execute_trade(signal)
     else:
         send_telegram("❌ No strong signal found")
 except Exception as e:
