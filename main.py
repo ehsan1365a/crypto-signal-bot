@@ -1,28 +1,24 @@
 import ccxt
+import os
+import time
 import pandas as pd
 import numpy as np
-import os
-import requests
 from datetime import datetime
 
-# ====== CONFIG ======
-SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
-LEVERAGE = 3
-RISK_USDT = 8  # مارجین مصرفی
-TIMEFRAME_TREND = "1h"
-TIMEFRAME_ENTRY = "15m"
-
+# =======================
+# Telegram
+# =======================
 TELEGRAM_TOKEN = os.getenv("telegram_token")
 CHAT_ID = os.getenv("chat_id")
 
-# ====== TELEGRAM ======
-def send(msg):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": msg}
-    )
+def send_telegram(msg):
+    import requests
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
 
-# ====== EXCHANGE ======
+# =======================
+# CoinEx Futures
+# =======================
 exchange = ccxt.coinex({
     "apiKey": os.getenv("COINEX_API_KEY"),
     "secret": os.getenv("COINEX_API_SECRET"),
@@ -33,126 +29,130 @@ exchange = ccxt.coinex({
     }
 })
 
-# ====== INDICATORS ======
-def ema(series, n):
-    return series.ewm(span=n).mean()
+# =======================
+# SETTINGS
+# =======================
+TIMEFRAMES = ["15m", "1h"]
+RISK_USDT = 8          # مارجین
+LEVERAGE = 3
+ATR_MULT_SL = 1.2
+ATR_MULT_TP = 2.0
 
-def rsi(series, n=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    rs = gain.rolling(n).mean() / loss.rolling(n).mean()
-    return 100 - (100 / (1 + rs))
+SYMBOLS = [
+    "BTC/USDT:USDT",
+    "ETH/USDT:USDT",
+    "SOL/USDT:USDT",
+    "BNB/USDT:USDT",
+    "XRP/USDT:USDT",
+    "ADA/USDT:USDT",
+    "AVAX/USDT:USDT",
+    "DOGE/USDT:USDT"
+]
 
-def atr(df, n=14):
-    hl = df["high"] - df["low"]
-    hc = abs(df["high"] - df["close"].shift())
-    lc = abs(df["low"] - df["close"].shift())
-    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-    return tr.rolling(n).mean()
+# =======================
+# Indicators
+# =======================
+def atr(df, period=14):
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    tr = np.maximum(high - low, np.maximum(abs(high - close.shift()), abs(low - close.shift())))
+    return tr.rolling(period).mean()
 
-# ====== SIGNAL CHECK ======
-def analyze(symbol):
-    df1h = pd.DataFrame(
-        exchange.fetch_ohlcv(symbol, TIMEFRAME_TREND, limit=200),
-        columns=["t","open","high","low","close","v"]
-    )
-    df15 = pd.DataFrame(
-        exchange.fetch_ohlcv(symbol, TIMEFRAME_ENTRY, limit=200),
-        columns=["t","open","high","low","close","v"]
-    )
+def signal_from_tf(symbol, tf):
+    ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=100)
+    df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+    df["ema_fast"] = df["close"].ewm(span=20).mean()
+    df["ema_slow"] = df["close"].ewm(span=50).mean()
+    df["atr"] = atr(df)
 
-    df1h["ema50"] = ema(df1h["close"], 50)
-    df1h["ema200"] = ema(df1h["close"], 200)
+    last = df.iloc[-1]
 
-    trend = None
-    if df1h["ema50"].iloc[-1] > df1h["ema200"].iloc[-1]:
-        trend = "LONG"
-    elif df1h["ema50"].iloc[-1] < df1h["ema200"].iloc[-1]:
-        trend = "SHORT"
+    if last["ema_fast"] > last["ema_slow"]:
+        return "LONG", last["atr"]
+    elif last["ema_fast"] < last["ema_slow"]:
+        return "SHORT", last["atr"]
+    return None, None
+
+# =======================
+# Find Best Signal
+# =======================
+def find_best_signal():
+    best = None
+
+    for symbol in SYMBOLS:
+        directions = []
+        atrs = []
+
+        for tf in TIMEFRAMES:
+            side, atr_val = signal_from_tf(symbol, tf)
+            if side:
+                directions.append(side)
+                atrs.append(atr_val)
+
+        if len(directions) == len(TIMEFRAMES) and directions.count(directions[0]) == len(directions):
+            strength = np.mean(atrs)
+            if not best or strength > best["strength"]:
+                best = {
+                    "symbol": symbol,
+                    "side": directions[0],
+                    "atr": strength
+                }
+
+    return best
+
+# =======================
+# Execute Trade
+# =======================
+def execute_trade(signal):
+    symbol = signal["symbol"]
+    side = signal["side"]
+    atr_val = signal["atr"]
+
+    exchange.set_leverage(LEVERAGE, symbol)
+
+    ticker = exchange.fetch_ticker(symbol)
+    price = ticker["last"]
+
+    amount = round((RISK_USDT * LEVERAGE) / price, 4)
+
+    if side == "LONG":
+        order = exchange.create_market_buy_order(symbol, amount)
+        sl = price - ATR_MULT_SL * atr_val
+        tp = price + ATR_MULT_TP * atr_val
+        exchange.create_order(symbol, "market", "sell", amount, None, {"stopPrice": sl})
+        exchange.create_order(symbol, "market", "sell", amount, None, {"stopPrice": tp})
     else:
-        return None
+        order = exchange.create_market_sell_order(symbol, amount)
+        sl = price + ATR_MULT_SL * atr_val
+        tp = price - ATR_MULT_TP * atr_val
+        exchange.create_order(symbol, "market", "buy", amount, None, {"stopPrice": sl})
+        exchange.create_order(symbol, "market", "buy", amount, None, {"stopPrice": tp})
 
-    df15["rsi"] = rsi(df15["close"])
-    df15["atr"] = atr(df15)
+    send_telegram(
+        f"✅ BEST SIGNAL EXECUTED\n\n"
+        f"Symbol: {symbol}\n"
+        f"Side: {side}\n"
+        f"Entry: {price}\n"
+        f"Amount: {amount}\n"
+        f"SL: {round(sl,4)}\n"
+        f"TP: {round(tp,4)}"
+    )
 
-    last = df15.iloc[-1]
+# =======================
+# MAIN
+# =======================
+send_telegram("🚀 Auto Futures Bot Started")
 
-    if trend == "LONG" and last["rsi"] > 55:
-        score = last["rsi"]
-    elif trend == "SHORT" and last["rsi"] < 45:
-        score = 100 - last["rsi"]
+try:
+    signal = find_best_signal()
+
+    if not signal:
+        send_telegram("❌ No strong signal found")
     else:
-        return None
+        execute_trade(signal)
 
-    return {
-        "symbol": symbol,
-        "side": trend,
-        "price": last["close"],
-        "atr": last["atr"],
-        "score": score
-    }
+except Exception as e:
+    send_telegram(f"❌ Bot Error: {str(e)}")
 
-# ====== RUN ======
-send("🚀 Auto Futures Bot Started")
-
-signals = []
-for s in SYMBOLS:
-    try:
-        res = analyze(s)
-        if res:
-            signals.append(res)
-    except:
-        pass
-
-if not signals:
-    send("❌ No strong signal found")
-    exit()
-
-best = sorted(signals, key=lambda x: x["score"], reverse=True)[0]
-
-symbol = best["symbol"]
-side = best["side"]
-price = best["price"]
-atr_val = best["atr"]
-
-exchange.set_leverage(LEVERAGE, symbol)
-
-amount = round((RISK_USDT * LEVERAGE) / price, 4)
-
-order = exchange.create_market_order(
-    symbol,
-    "buy" if side == "LONG" else "sell",
-    amount
-)
-
-sl = price - atr_val if side == "LONG" else price + atr_val
-tp = price + atr_val * 2 if side == "LONG" else price - atr_val * 2
-
-exchange.create_order(
-    symbol,
-    "market",
-    "sell" if side == "LONG" else "buy",
-    amount,
-    params={"stopPrice": sl, "reduceOnly": True}
-)
-
-exchange.create_order(
-    symbol,
-    "market",
-    "sell" if side == "LONG" else "buy",
-    amount,
-    params={"stopPrice": tp, "reduceOnly": True}
-)
-
-send(
-    f"✅ AUTO TRADE EXECUTED\n\n"
-    f"{symbol}\n"
-    f"Side: {side}\n"
-    f"Entry: {price}\n"
-    f"SL: {sl}\n"
-    f"TP: {tp}\n"
-    f"Amount: {amount}"
-)
-
-send("⏹ Bot Finished")
+send_telegram("⏹ Bot Finished")
